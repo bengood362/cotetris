@@ -49,7 +49,7 @@ let rules = [
             // {
             //     loader: MiniCssExtractPlugin.loader,
             //     options: {
-            //         publicPath: './server',
+            //         publicPath: './build',
             //     },
             // },
             {
@@ -86,6 +86,7 @@ let rules = [
 // dev plugin
 let devPlugins =  [
     new CopyWebpackPlugin([
+        { from: './src/index.html' },
         { from: './src/resource/music/music.mp3' },
         { from: './src/resource/css/loader.css' },
     ]),
@@ -119,7 +120,7 @@ let productionPlugins = [
     ]),
     // HTML 模板
     new HtmlWebpackPlugin({
-        template: __dirname + '/server/index.tmpl.html',
+        template: __dirname + '/build/index.tmpl.html',
     }),
     // JS压缩
     // new webpack.optimize.UglifyJsPlugin({
@@ -133,22 +134,23 @@ let productionPlugins = [
     }),
 ];
 
+const watchOptions = {
+    poll: 1000,
+};
+
 // dev server
 let devServer = {
-    // contentBase: path.join(__dirname, './server'),
-    // publicPath: path.join(__dirname, './server'),
-    contentBase: path.join(__dirname, 'server'),
-    publicPath: path.join(__dirname, 'server'),
+    contentBase: path.join(__dirname, 'build'),
+    publicPath: path.join(__dirname, 'build'),
     filename: '[name].js',
-    watchOptions: {
-        poll: 1000,
-    },
+    watchOptions,
     // colors: true,
     // historyApiFallback: true,
     port: 8080, // defaults to "8080"
     // hot: true, // Hot Module Replacement
     // inline: true, // Livereload
     host: '0.0.0.0',
+    writeToDisk: true,
     // disableHostCheck: true,
 };
 
@@ -160,6 +162,7 @@ module.exports = {
     devPlugins: devPlugins,
     productionPlugins: productionPlugins,
     devServer: devServer,
+    watchOptions,
     // postcss: function () {
     //     return [precss, autoprefixer];
     // },

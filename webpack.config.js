@@ -6,8 +6,8 @@ module.exports = {
     devtool: config.devtool,
     entry: config.entry,
     output: {
-        path: path.join(__dirname, 'server'),
-        publicPath: path.join(__dirname, 'server'),
+        path: path.join(__dirname, 'build'),
+        publicPath: path.join(__dirname, 'build'),
         filename: '[name].js',
     },
     // eslint: config.eslint,
@@ -17,7 +17,7 @@ module.exports = {
     plugins: config.devPlugins,
     devServer: config.devServer,
     optimization: {
-        minimize: true, // true for prod
+        minimize: true,
     },
     mode: 'development',
     // postcss: config.postcss,

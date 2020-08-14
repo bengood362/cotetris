@@ -751,12 +751,12 @@ export default class Peer extends React.Component {
                 <p>lobbyId: { lobbyId }</p>
                 {
                     lobbyMemberIds.map((id) => (
-                        <p>{id}: { JSON.stringify(this._memberLookup[id]) }</p>
+                        <p key={`lobbyMember-${id}`}>{id}: { JSON.stringify(this._memberLookup[id]) }</p>
                     ))
                 }
                 {
                     teamIds.map((id) => (
-                        <p>{id}: { JSON.stringify(this._teamLookup[id]) }</p>
+                        <p key={`teamId-${id}`}>{id}: { JSON.stringify(this._teamLookup[id]) }</p>
                     ))
                 }
                 { errorMessage ? (
