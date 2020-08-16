@@ -1,3 +1,4 @@
+import * as R from 'ramda';
 import PropTypes from 'prop-types';
 /**
  * @typedef {object} Member
@@ -11,19 +12,27 @@ export default class Member {
         id,
         displayName,
         isReady,
+        teamId = null,
     ) {
         this.id = id;
         this.displayName = displayName;
         this.isReady = isReady;
+        this.teamId = teamId;
     }
 
     static PropType = PropTypes.shape({
         id: PropTypes.string.isRequired,
         displayName: PropTypes.string.isRequired,
         isReady: PropTypes.bool.isRequired,
+        teamId: PropTypes.string,
     });
 
     static fromObj(memberObj) {
-        return new Member(memberObj.id, memberObj.displayName, memberObj.isReady);
+        return Object.assign(new Member(), memberObj);
     }
+
+    static toggleReady = (member) => R.set(R.lensProp('isReady'), R.not(R.prop('isReady', member)))(member);
+    static getId = (member) => R.pathOr(null, ['id'], member);
+    static getTeamId = (member) => R.pathOr(null, ['teamId'], member);
+    static setTeamId = R.curry((teamId, member) => R.set(R.lensProp('teamId'), teamId, member));
 }

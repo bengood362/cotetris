@@ -147,8 +147,8 @@ let devServer = {
     // colors: true,
     // historyApiFallback: true,
     port: 8080, // defaults to "8080"
-    // hot: true, // Hot Module Replacement
-    // inline: true, // Livereload
+    hot: false, // Hot Module Replacement
+    inline: false, // Livereload
     host: '0.0.0.0',
     writeToDisk: true,
     // disableHostCheck: true,

@@ -35,6 +35,7 @@ class PeerJsUserRegisterForm extends React.PureComponent {
         }));
     }
 
+    // TODO: validation: prevent [-_].*[-_]
     _handleFormSubmit = (event) => {
         const { option, lobbyId, displayName } = this.state;
         const isHosting = (option === ConnectionOption.HOST_LOBBY);

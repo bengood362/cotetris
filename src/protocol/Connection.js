@@ -1,6 +1,7 @@
 // TODO: Connection Protocol doesn't support message hopping :)
 // TODO: Verification of message? chain of trust
 // TODO: Message Session for paired messages?
+// TODO: add a timestamp & pqueue there later?
 import { nanoid } from 'nanoid';
 
 const PROTOCOL = 'CONNECTION';
@@ -116,7 +117,7 @@ function createAckSyncUserLookupMessage(myId) {
 }
 
 function createResponseConnectionInfoMessage(myId, params) {
-    const { teamIds, lobbyMemberIds, teamLookup, memberLookup } = params;
+    const { lobbyMemberIds, teamLookup, memberLookup } = params;
 
     return JSON.stringify({
         ...createCommonProperties(),
@@ -125,7 +126,6 @@ function createResponseConnectionInfoMessage(myId, params) {
         payload: {
             teamLookup,
             memberLookup,
-            teamIds,
             lobbyMemberIds,
         },
     });
@@ -141,7 +141,7 @@ function createJoinLobbyMessage(myId) {
 }
 
 function createAckJoinLobbyMessage(myId, params) {
-    const { teamLookup, memberLookup, teamIds, lobbyMemberIds } = params; // [Team1, Team2]
+    const { teamLookup, memberLookup, lobbyMemberIds } = params;
 
     return JSON.stringify({
         ...createCommonProperties(),
@@ -150,7 +150,6 @@ function createAckJoinLobbyMessage(myId, params) {
         payload: {
             teamLookup,
             memberLookup,
-            teamIds,
             lobbyMemberIds,
         },
     });
@@ -214,14 +213,13 @@ function createChooseTeamMessage(myId, params) {
 }
 
 function createAckChooseTeamMessage(myId, params) {
-    const { targetUserId, targetTeamId } = params;
+    const { targetTeamId } = params;
 
     return JSON.stringify({
         ...createCommonProperties(),
         type: MessageTypes.ACK_CHOOSE_TEAM,
         from: myId,
         payload: {
-            targetUserId,
             targetTeamId,
         },
     });

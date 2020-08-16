@@ -1,14 +1,16 @@
 import React from 'react';
 import { connect } from 'react-redux';
+import { withRouter } from 'react-router-dom';
 import classnames from 'classnames';
 import propTypes from 'prop-types';
-import style from './room.less';
 
 import Decorate from '../../components/decorate';
 import Peer from '../../components/peer';
 
 import { visibilityChangeEvent, isFocus } from '../../unit/';
 import states from '../../control/states';
+
+import style from './room.less';
 
 class Room extends React.Component {
     constructor() {
@@ -62,4 +64,4 @@ const mapStateToProps = (state) => ({
     nth: state.get('pause'),
 });
 
-export default connect(mapStateToProps)(Room);
+export default connect(mapStateToProps)(withRouter(Room));

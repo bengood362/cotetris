@@ -1,12 +1,13 @@
 import React from 'react';
 import PropTypes from 'prop-types';
-import { nanoid } from 'nanoid';
+import { customAlphabet } from 'nanoid';
 import * as R from 'ramda';
 
 import { List } from 'immutable';
 
 // Data Model
 import Member from '../../model/Member';
+import Team from '../../model/Team';
 
 // Protocol
 import {
@@ -48,6 +49,8 @@ import actions from '../../actions';
 
 import * as reducerType from '../../unit/reducerType';
 
+const memberIdCharacterSet = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const memberNanoid = customAlphabet(memberIdCharacterSet, 24)
 const MAX_RETRY_COUNT = 5; // 0, 500, 1500, 4500, 13500, 15000
 const RETRY_COEFF = 3;
 const RETRY_BASE = 500;
@@ -58,6 +61,15 @@ const MessageState = {
     RECEIVED: 20,
     FINISHED: 30,
 };
+
+// output: { teamId1: [memberId1, memberId2], teamId2: [], null: [...]}
+function deriveTeamMemberIds(memberLookup, teamLookup) {
+    const members = R.values(memberLookup);
+    const getMembersInTeam = (team) => R.filter(R.propEq('teamId', R.prop('id', team)), members);
+    const teamMemberLookup = R.map(getMembersInTeam, teamLookup);
+
+    return R.map(R.map(R.prop('id')), teamMemberLookup);
+}
 
 export default class Peer extends React.Component {
     static propTypes = {
@@ -81,24 +93,10 @@ export default class Peer extends React.Component {
         this._messageRetryCountLookup = {};
         this._fetchConnectionInfoTimer = null;
         this._peerJsClient = null;
-        this._memberLookup = {};
         this._connectionLookup = {};
 
-        const team1 = {
-            id: 1,
-            memberIds: [],
-            teamColor: '#ccffcc',
-        };
-        const team2 = {
-            id: 2,
-            memberIds: [],
-            teamColor: '#ccccff',
-        };
-
-        this._teamLookup = {
-            [team1.id]: team1,
-            [team2.id]: team2,
-        };
+        const team1 = new Team('1', '#ccffcc', []);
+        const team2 = new Team('2', '#ccccff', []);
 
         this.state = {
             peerJsConfig: {
@@ -113,12 +111,17 @@ export default class Peer extends React.Component {
             isHosting: false,
             myId: '',
             displayName: '',
-            teamIds: [team1.id, team2.id],
             lobbyMemberIds: [],
 
             errorMessage: '',
-            rerenderKey: 0,
+            memberLookup: {},
+            teamLookup: {
+                [team1.id]: team1,
+                [team2.id]: team2,
+            },
         };
+
+        // TODO: heartbeat to connection and reconnect if needed
     }
 
     componentWillUnmount() {
@@ -134,16 +137,36 @@ export default class Peer extends React.Component {
         return cur !== props.cur || point !== props.point || max !== props.max || !props.cur;
     }
 
+    _updateTeamId = (targetTeamId, targetMemberId) => {
+        return new Promise((resolve) => {
+            this.setState((state) => {
+                // Update Member
+                const targetMember = state.memberLookup[targetMemberId];
+                const newMember = Member.setTeamId(targetTeamId, targetMember);
+                const memberLookupUpdater = (memberLookup) => R.set(R.lensProp(targetMemberId), newMember, memberLookup);
+                const newMemberLookup = memberLookupUpdater(state.memberLookup);
+
+                // Update Team Member Ids
+                const teamLookupEvolver = R.map(Team.setTeamMembers(R.__), deriveTeamMemberIds(newMemberLookup, state.teamLookup));
+                const newTeamLookup = R.evolve(teamLookupEvolver, state.teamLookup);
+
+                return {
+                    memberLookup: newMemberLookup,
+                    teamLookup: newTeamLookup,
+                };
+            }, resolve);
+        });
+    }
+
     // DEBUG
     showAllConnection = () => {
-        const { myId, teamIds, lobbyMemberIds } = this.state;
+        const { myId, lobbyMemberIds, memberLookup, teamLookup } = this.state;
 
         console.log('this._connectionLookup', this._connectionLookup);
-        console.log('this._memberLookup', this._memberLookup);
-        console.log('this._teamLookup', this._teamLookup);
+        console.log('memberLookup', memberLookup);
+        console.log('teamLookup', teamLookup);
         console.log('myId', myId);
         console.log('lobbyMemberIds', lobbyMemberIds);
-        console.log('teamIds', teamIds);
     }
 
     sendPingMessageToAllConnection = () => {
@@ -160,19 +183,26 @@ export default class Peer extends React.Component {
      * PeerJs connections
      *  */
     _broadcastConnectionInfo = () => {
-        const { myId, teamIds, lobbyMemberIds } = this.state;
+        const { myId, lobbyMemberIds, memberLookup, teamLookup } = this.state;
 
         for (let memberId of lobbyMemberIds) {
             if (myId !== memberId) {
                 // TODO: optimization: remove sending lookup everytime, maybe only transient user state
+
+                console.log('teamLookup', teamLookup);
+                console.log('memberLookup', memberLookup);
+
                 const messageToSend = createResponseConnectionInfoMessage(myId, {
-                    teamLookup: this._teamLookup,
-                    memberLookup: this._memberLookup,
-                    teamIds,
+                    teamLookup: teamLookup,
+                    memberLookup: memberLookup,
                     lobbyMemberIds,
                 });
 
-                this._connectionLookup[memberId].send(messageToSend);
+                const targetConnection = this._connectionLookup[memberId];
+
+                console.assert(targetConnection, 'targetConnection must exists', { myId, targetId: memberId });
+
+                targetConnection.send(messageToSend);
             }
         }
     }
@@ -194,6 +224,8 @@ export default class Peer extends React.Component {
         // TODO: create state machine library and fire by trigger later
         if (messageState !== MessageState.FINISHED && retryCount < MAX_RETRY_COUNT) {
             setTimeout(() => this._handlePeerJsMessage(message), retryTimeout);
+        } else if (messageState !== MessageState.FINISHED && retryCount >= MAX_RETRY_COUNT) {
+            console.error('Message retried and failed', { message });
         }
     }
 
@@ -204,7 +236,9 @@ export default class Peer extends React.Component {
     }
 
     _handlePeerJsClientClose = (err) => {
-        this.setState({ errorMessage: 'Peerjs client close, please refresh' });
+        this.setState((state) => ({
+            errorMessage: `${state.errorMessage}\nPeerjs client close, please refresh`,
+        }));
     }
 
     // TODO: handle error
@@ -231,19 +265,32 @@ export default class Peer extends React.Component {
         const { isHosting } = this.state;
 
         delete this._connectionLookup[connectionIdToDrop];
-        delete this._memberLookup[connectionIdToDrop];
+
+        let newStateEvolver = {
+            memberLookup: (memberLookup) => (R.dissoc(connectionIdToDrop, memberLookup)),
+            errorMessage: (errorMessage) => (`${errorMessage}\nConnection ${connection.peer} close, please refresh`),
+        };
 
         if (isHosting) {
-            this.setState((state) => ({
-                lobbyMemberIds: state.lobbyMemberIds.filter((id) => id !== connectionIdToDrop),
-            }));
+            newStateEvolver['lobbyMemberIds'] = (lobbyMemberIds) => R.reject(R.equals(connectionIdToDrop), lobbyMemberIds);
         }
 
-        this.setState({ errorMessage: `Connection ${connection.peer} close, please refresh` });
+        this.setState((state) => (R.evolve(newStateEvolver, state)));
     }
     _handlePeerJsMessage = (message, connection) => {
-        const { protocol, type, uniqueId } = message;
+        const { protocol, type, uniqueId, from: messageFrom } = message;
         const myplayerid = store.getState().get('myplayerid');
+
+        if (connection.peer !== messageFrom) {
+            console.error('_handlePeerJsMessage: Spoofed as message sender', {
+                'connection.peer': connection.peer,
+                messageFrom,
+            });
+
+            this._setMessageFinished(message);
+
+            return;
+        }
 
         if (this._messageStateLookup[uniqueId] === MessageState.FINISHED) {
             console.error('_handlePeerJsMessage: message already resolved', { uniqueId });
@@ -270,6 +317,10 @@ export default class Peer extends React.Component {
                 this._handlePong(message);
             } else if (type === ConnectionMessageTypes.TOGGLE_READY) {
                 this._handleToggleReady(message);
+            } else if (type === ConnectionMessageTypes.CHOOSE_TEAM) {
+                this._handleChooseTeam(message);
+            } else if (type === ConnectionMessageTypes.ACK_CHOOSE_TEAM) {
+                this._handleAckChooseTeam(message);
             }
         } else if (message.label === 'syncmove') {
             todo[message.key].down(store, message.id);
@@ -418,14 +469,26 @@ export default class Peer extends React.Component {
         this._handlePeerJsMessage(message, connection);
     }
 
-    // message handlers
+    /**
+     * message handlers
+     * 1. Fail condition -> set finished
+     * 2. Stall condition -> Retry
+     * 3. Success -> set finished
+     * 4. Retry for N times -> set finished
+     */
     _handleConnectToUser = (message, connection) => {
         const { from: messageFrom, payload } = message;
         const { myId, displayName: myDisplayName } = this.state;
         const { displayName } = payload;
 
         this._connectionLookup[messageFrom] = connection;
-        this._memberLookup[messageFrom] = new Member(messageFrom, displayName, false);
+
+        this.setState((state) => ({
+            memberLookup: {
+                ...state.memberLookup,
+                [messageFrom]: new Member(messageFrom, displayName, false, null),
+            },
+        }));
 
         // create new member and add it
         this._connectionLookup[messageFrom].send(createAckConnectToUserMessage(myId, { displayName: myDisplayName }));
@@ -437,14 +500,20 @@ export default class Peer extends React.Component {
         const { displayName } = payload;
 
         this._connectionLookup[messageFrom] = connection;
-        this._memberLookup[messageFrom] = new Member(messageFrom, displayName, false);
+
+        this.setState((state) => ({
+            memberLookup: {
+                ...state.memberLookup,
+                [messageFrom]: new Member(messageFrom, displayName, false, null),
+            },
+        }));
         this._setMessageFinished(message);
     }
 
     _handleRequestConnectionInfo = (message) => {
         // Drop the message if not host
         const { from: messageFrom } = message;
-        const { isHosting, myId, lobbyId, teamIds, lobbyMemberIds } = this.state;
+        const { isHosting, myId, lobbyId, lobbyMemberIds, teamLookup, memberLookup } = this.state;
         const targetConnection = this._connectionLookup[messageFrom];
 
         if (!isHosting) {
@@ -460,9 +529,8 @@ export default class Peer extends React.Component {
 
         if (targetConnection) {
             const messageToSend = createResponseConnectionInfoMessage(myId, {
-                teamLookup: this._teamLookup,
-                memberLookup: this._memberLookup,
-                teamIds,
+                teamLookup,
+                memberLookup,
                 lobbyMemberIds,
             });
 
@@ -476,37 +544,40 @@ export default class Peer extends React.Component {
     _handleResponseConnectionInfo = (message) => {
         // Verify if the message is from host
         const { from: messageFrom, payload } = message;
-        const { teamIds, lobbyMemberIds, teamLookup, memberLookup } = payload;
+        const { lobbyMemberIds, teamLookup, memberLookup } = payload;
         const { lobbyId, isHosting } = this.state;
 
-        if (!isHosting && (messageFrom === lobbyId)) {
-            this._teamLookup = teamLookup;
-            this._memberLookup = memberLookup;
-            this.setState({
-                teamIds,
-                lobbyMemberIds,
-            });
-        } else {
-            console.error('_handleResponseConnectionInfo: Spoof as host', {
+        if (isHosting || messageFrom !== lobbyId) {
+            console.error('_handleResponseConnectionInfo: Spoofed as host', {
                 lobbyId,
                 messageFrom,
             });
+
+            this._setMessageFinished(message);
+
+            return;
         }
+
+        this.setState({
+            teamLookup,
+            memberLookup,
+            lobbyMemberIds,
+        });
 
         this._setMessageFinished(message);
     }
 
     _handleJoinLobby = (message) => {
         const { from: messageFrom } = message;
+        const { memberLookup, teamLookup } = this.state;
 
         const targetConnection = this._connectionLookup[messageFrom];
 
         if (targetConnection) {
-            const { myId, teamIds, lobbyMemberIds } = this.state;
+            const { myId, lobbyMemberIds } = this.state;
             const messageToSend = createAckJoinLobbyMessage(myId, {
-                memberLookup: this._memberLookup,
-                teamLookup: this._teamLookup,
-                teamIds,
+                memberLookup,
+                teamLookup,
                 lobbyMemberIds: [...lobbyMemberIds, messageFrom],
             });
 
@@ -528,13 +599,11 @@ export default class Peer extends React.Component {
 
         if (targetConnection) {
             const { myId, lobbyId } = this.state;
-            const { teamIds, teamLookup, lobbyMemberIds, memberLookup } = payload;
-
-            this._memberLookup = memberLookup;
-            this._teamLookup = teamLookup;
+            const { teamLookup, lobbyMemberIds, memberLookup } = payload;
 
             this.setState({
-                teamIds,
+                memberLookup,
+                teamLookup,
                 lobbyMemberIds,
             });
 
@@ -544,6 +613,7 @@ export default class Peer extends React.Component {
                 this._connectionLookup[lobbyId].send(messageToSend);
             };
 
+            // Should works without this
             this._fetchConnectionInfoTimer = setInterval(sendRequestConnectionInfoMessage, FETCH_CONNECTION_INFO_INTERVAL);
             this._setMessageFinished(message);
         } else {
@@ -553,10 +623,10 @@ export default class Peer extends React.Component {
 
     _handleToggleReady = (message) => {
         const { from: messageFrom } = message;
-        const { isHosting } = this.state;
+        const { isHosting, memberLookup } = this.state;
 
         const targetConnection = this._connectionLookup[messageFrom];
-        const targetMember = this._memberLookup[messageFrom];
+        const targetMember = memberLookup[messageFrom];
 
         if (!isHosting) {
             console.error('_handleToggleReady: Not a host');
@@ -566,19 +636,68 @@ export default class Peer extends React.Component {
         }
 
         if (targetConnection && targetMember) {
-            const toggleReady = (member) => R.set(R.lensProp('isReady'), R.not(R.prop('isReady', member)))(member);
+            this.setState((state) => ({
+                memberLookup: R.evolve({
+                    [messageFrom]: Member.toggleReady,
+                }, state.memberLookup),
+            }), () => {
+                this._broadcastConnectionInfo();
+            });
 
-            this._memberLookup = R.evolve({
-                [messageFrom]: toggleReady,
-            }, this._memberLookup);
-
-            this.setState({ rerenderKey: Math.random() }); // trigger re-render
-
-            this._broadcastConnectionInfo();
             this._setMessageFinished(message);
         } else {
             this._retryMessage(message);
         }
+    }
+
+    _handleChooseTeam = (message) => {
+        const { from: messageFrom, payload } = message;
+        const { targetTeamId } = payload;
+
+        const { memberLookup, myId, isHosting } = this.state;
+        const targetConnection = this._connectionLookup[messageFrom];
+        const targetMember = memberLookup[messageFrom];
+
+        if (!isHosting) {
+            console.error('_handleChooseTeam: Not a host');
+
+            this._setMessageFinished(message);
+
+            return;
+        }
+
+        if (targetConnection && targetMember) {
+            this._updateTeamId(targetTeamId, messageFrom);
+
+            // Send Message
+            const messageToSend = createAckChooseTeamMessage(myId, {
+                targetTeamId,
+            });
+
+            targetConnection.send(messageToSend);
+
+            this._setMessageFinished(message);
+        } else {
+            this._retryMessage(message);
+        }
+    }
+
+    _handleAckChooseTeam = (message) => {
+        const { from: messageFrom, payload } = message;
+        const { targetTeamId } = payload;
+        const { myId, lobbyId, isHosting } = this.state;
+
+        if (isHosting || messageFrom !== lobbyId) {
+            console.error('_handleAckChooseTeam: Spoofed as host', { messageFrom, lobbyId });
+
+            this._setMessageFinished(message);
+
+            return;
+        }
+
+        this._updateTeamId(targetTeamId, myId);
+
+        this._setMessageFinished(message);
     }
 
     _handlePing = (message) => {
@@ -586,10 +705,12 @@ export default class Peer extends React.Component {
         const targetConnection = this._connectionLookup[messageFrom];
         const { myId } = this.state;
 
-        console.log('receive pinged', { messageFrom });
+        console.log('receive ping', { messageFrom });
 
         if (targetConnection) {
             targetConnection.send(createPongMessage(myId));
+        } else {
+            this._retryMessage(message);
         }
 
         this._setMessageFinished(message);
@@ -605,21 +726,44 @@ export default class Peer extends React.Component {
     /**
      * User actions
      *  */
-    _chooseTeam = (event, teamId) => {
-        // const { myId, lobbyId } = this.state;
+    _connectToLobby = async (lobbyId, myId, displayName) => {
+        const connection = this._peerJsClient.connect(lobbyId, { reliable: true });
 
-        // const messageToSend = createChooseTeamMessage(myId, { targetTeamId: teamId });
+        try {
+            await this._handlePeerJsClientConnection(connection);
+
+            connection.send(createConnectToUserMessage(myId, { displayName }));
+            connection.send(createJoinLobbyMessage(myId));
+
+            return Promise.resolve();
+        } catch (err) {
+            this._handlePeerJsDataConnectionError(err);
+
+            return Promise.reject(err);
+        }
     }
 
-    _connectToLobby = async (lobbyId, myId, displayName) => {
-        const connection = this._peerJsClient.connect(lobbyId);
+    _handleTeamSelect = (event, teamId, memberId) => {
+        const { myId, lobbyId, isHosting, memberLookup, teamLookup } = this.state;
 
-        await this._handlePeerJsClientConnection(connection);
+        if (isHosting) {
+            console.log('teamId', teamId)
+            console.log('memberId', memberId)
+            console.log('memberLookup', memberLookup)
 
-        connection.send(createConnectToUserMessage(myId, { displayName }));
-        connection.send(createJoinLobbyMessage(myId));
+            this._updateTeamId(teamId, memberId).then(() => {
+                this._broadcastConnectionInfo();
+            });
 
-        return Promise.resolve();
+            console.log('memberLookup', memberLookup)
+            console.log('teamLookup', teamLookup)
+
+        } else {
+            const messageToSend = createChooseTeamMessage(myId, { targetTeamId: teamId });
+            const hostConnection = this._connectionLookup[lobbyId];
+
+            hostConnection.send(messageToSend);
+        }
     }
 
     _handleReadyButtonClick = (event) => {
@@ -627,13 +771,13 @@ export default class Peer extends React.Component {
         const { myId, lobbyId, isHosting } = this.state;
 
         if (isHosting) {
-            const toggleReady = (member) => R.set(R.lensProp('isReady'), R.not(R.prop('isReady', member)))(member);
-
-            this._memberLookup = R.evolve({ [myId]: toggleReady }, this._memberLookup);
-
-            this.setState({ rerenderKey: Math.random() });
-
-            this._broadcastConnectionInfo();
+            this.setState((state) => ({
+                memberLookup: R.evolve({
+                    [myId]: Member.toggleReady,
+                }, state.memberLookup),
+            }), () => {
+                this._broadcastConnectionInfo();
+            });
         } else {
             const messageToSend = createToggleReadyMessage(myId);
 
@@ -670,7 +814,11 @@ export default class Peer extends React.Component {
                 this._handlePeerJsClientClose();
             },
             onConnection: async (connection, peerJsClient) => {
-                await this._handlePeerJsClientConnection(connection);
+                try {
+                    await this._handlePeerJsClientConnection(connection);
+                } catch (err) {
+                    this._handlePeerJsDataConnectionError(err);
+                }
             },
         });
     }
@@ -679,41 +827,55 @@ export default class Peer extends React.Component {
     // TODO: handle the case that lobby created with the same lobbyId
     _handlePeerJsRegisterHost = async (event, lobbyId, displayName) => {
         const myId = lobbyId;
-        const myMember = new Member(myId, displayName, false);
+        const myMember = new Member(myId, displayName, false, null);
         const { peerJsConfig } = this.state;
 
-        this._memberLookup[myId] = myMember;
-        this._peerJsClient = await this._createPeerJsClient(myId, peerJsConfig, { isHosting: true, lobbyMemberIds: [ myId ] });
+        try {
+            this._peerJsClient = await this._createPeerJsClient(myId, peerJsConfig, { isHosting: true, lobbyMemberIds: [ myId ] });
 
-        this.setState({
-            lobbyId,
-            myId: lobbyId,
-            displayName,
-            isHosting: true,
-            lobbyMemberIds: [ myId ], // flush lobby member when hosting
-        });
+            this.setState((state) => ({
+                lobbyId,
+                myId: lobbyId,
+                displayName,
+                isHosting: true,
+                lobbyMemberIds: [ myId ], // flush lobby member when hosting
+                memberLookup: {
+                    ...state.memberLookup,
+                    [myId]: myMember,
+                },
+            }));
+        } catch (err) {
+            this._handlePeerJsClientError(err);
+        }
     }
 
     // Join lobby
     // TODO: handle the case that joined non-existing lobbyId
     _handlePeerJsRegisterJoin = async (event, lobbyId, displayName) => {
-        const myId = nanoid();
-        const myMember = new Member(myId, displayName, false);
+        const myId = `m-${memberNanoid()}-id`;
+        const myMember = new Member(myId, displayName, false, null);
         const { peerJsConfig } = this.state;
 
-        this._memberLookup[myId] = myMember;
-        this._peerJsClient = await this._createPeerJsClient(myId, peerJsConfig, { isHosting: false });
+        try {
+            this._peerJsClient = await this._createPeerJsClient(myId, peerJsConfig, { isHosting: false });
+            await this._connectToLobby(lobbyId, myId, displayName);
 
-        await this._connectToLobby(lobbyId, myId, displayName);
+            // wait until the host ack and update member
+            this.setState((state) => ({
+                lobbyId,
+                myId,
+                displayName,
+                isHosting: false,
+                lobbyMemberIds: [ myId ], // flush lobby member when joining
+                memberLookup: {
+                    ...state.memberLookup,
+                    [myId]: myMember,
+                },
+            }));
+        } catch (err) {
+            return this._handlePeerJsClientError(err);
+        }
 
-        // wait until the host ack and update member
-        this.setState((state) => ({
-            lobbyId,
-            myId,
-            displayName,
-            isHosting: false,
-            lobbyMemberIds: [ myId ], // flush lobby member when joining
-        }));
     }
 
     _handleConfigUpdate = (event, host, port, path, debug) => {
@@ -735,9 +897,10 @@ export default class Peer extends React.Component {
         const {
             peerJsConfig,
             myId,
-            teamIds,
             lobbyMemberIds,
             errorMessage,
+            memberLookup,
+            teamLookup,
 
             lobbyId,
         } = this.state;
@@ -751,12 +914,12 @@ export default class Peer extends React.Component {
                 <p>lobbyId: { lobbyId }</p>
                 {
                     lobbyMemberIds.map((id) => (
-                        <p key={`lobbyMember-${id}`}>{id}: { JSON.stringify(this._memberLookup[id]) }</p>
+                        <p key={`lobbyMember-${id}`}>{id}: { JSON.stringify(memberLookup[id]) }</p>
                     ))
                 }
                 {
-                    teamIds.map((id) => (
-                        <p key={`teamId-${id}`}>{id}: { JSON.stringify(this._teamLookup[id]) }</p>
+                    R.keys(teamLookup).map((id) => (
+                        <p key={`teamId-${id}`}>{id}: { JSON.stringify(teamLookup[id]) }</p>
                     ))
                 }
                 { errorMessage ? (
@@ -780,11 +943,11 @@ export default class Peer extends React.Component {
                     <Lobby
                         myId={myId}
                         maxMember={4}
-                        teamLookup={this._teamLookup}
-                        teamIds={teamIds}
-                        memberLookup={this._memberLookup}
+                        teamLookup={teamLookup}
+                        memberLookup={memberLookup}
                         lobbyMemberIds={lobbyMemberIds}
                         onReadyButtonClick={this._handleReadyButtonClick}
+                        onTeamSelect={this._handleTeamSelect}
                     />
                 ) : null}
 

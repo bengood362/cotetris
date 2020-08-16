@@ -6,9 +6,8 @@ import Team from '../../model/Team';
 
 import styles from './index.less';
 
-class Lobby extends React.PureComponent {
+class Lobby extends React.Component {
     static propTypes = {
-        teamIds: PropTypes.arrayOf(PropTypes.string),
         lobbyMemberIds: PropTypes.arrayOf(PropTypes.string),
         teamLookup: PropTypes.objectOf(Team.PropType),
         memberLookup: PropTypes.objectOf(Member.PropType),
@@ -17,6 +16,7 @@ class Lobby extends React.PureComponent {
         maxMember: PropTypes.number.isRequired,
 
         onReadyButtonClick: PropTypes.func.isRequired,
+        onTeamSelect: PropTypes.func.isRequired,
     }
 
     static defaultProps = {
@@ -33,6 +33,10 @@ class Lobby extends React.PureComponent {
         this.props.onReadyButtonClick(event);
     }
 
+    _handleTeamSelectClick = (event, teamId, memberId) => {
+        this.props.onTeamSelect(event, teamId, memberId);
+    }
+
     _renderEmptyRow = (member) => {
         const rowStyle = { backgroundColor: '#eeeeee', justifyContent: 'center' };
 
@@ -46,14 +50,16 @@ class Lobby extends React.PureComponent {
     }
 
     _renderRow = (member) => {
-        const { teamIds, teamLookup, myId } = this.props;
-        const teamInfoList = teamIds.map((id) => (teamLookup[id]));
+        const { teamLookup, myId } = this.props;
+        const teamIds = R.keys(teamLookup);
+        const teamList = teamIds.map((id) => (teamLookup[id]));
+        const isMyRow = myId === member.id;
 
-        console.log('teamInfoList', teamInfoList);
-        console.log('member.id', member.id);
+        console.log('teamInfoList', teamList)
+        console.log('member.id', member.id)
 
         const checkMemberIdInTeam = (teamInfo) => R.includes(member.id, R.prop('memberIds', teamInfo));
-        const targetTeamInfo = R.filter(checkMemberIdInTeam, teamInfoList)[0];
+        const targetTeamInfo = R.filter(checkMemberIdInTeam, teamList)[0];
         const backgroundColor = R.propOr('#eeeeee', 'teamColor', targetTeamInfo);
         let rowStyle = { backgroundColor };
 
@@ -62,15 +68,15 @@ class Lobby extends React.PureComponent {
         }
 
         return (
-            <div className={styles.lobbyRow} style={rowStyle}>
+            <div key={member.id} className={styles.lobbyRow} style={rowStyle}>
                 <div className={styles.nameCol}>
                     { member.displayName }
                 </div>
-                <div className={styles.readyCol}>
+                <div className={styles.readyTextCol}>
                     { member.isReady ? 'Ready' : 'Not Ready' }
                 </div>
                 {
-                    myId === member.id ? (
+                    isMyRow ? (
                         <div className={styles.readyButtonCol}>
                             <button
                                 className={styles.readyButton}
@@ -83,6 +89,21 @@ class Lobby extends React.PureComponent {
                         <div className={styles.readyButtonCol} />
                     )
                 }
+                { teamList.map(({ id: teamId, teamColor }) => (
+                    isMyRow ? (
+                        <div className={styles.teamSelectRow} key={`${member.id}-${teamId}`}>
+                            <button
+                                className={styles.teamSelectButton}
+                                style={{ background: teamColor }}
+                                onClick={(event) => this._handleTeamSelectClick(event, teamId, member.id)}
+                            >
+                                { teamId }
+                            </button>
+                        </div>
+                    ) : (
+                        <div className={styles.teamSelectRow} key={`${member.id}-${teamId}`}/>
+                    )
+                )) }
             </div>
         );
     }
