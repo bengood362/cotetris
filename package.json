@@ -58,7 +58,7 @@
     "less": "^3.11.1",
     "less-loader": "^6.1.0",
     "open-browser-webpack-plugin": "0.0.3",
-    "postcss": "^5.2.12",
+    "postcss": "^8.2.2",
     "postcss-loader": "^3.0.0",
     "precss": "^1.4.0",
     "react-transform-hmr": "^1.0.4",
